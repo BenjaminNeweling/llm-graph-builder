@@ -1,18 +1,8 @@
 import logging
 from langchain.docstore.document import Document
 import os
-from langchain_openai import ChatOpenAI, AzureChatOpenAI
-from langchain_google_vertexai import ChatVertexAI
-from langchain_groq import ChatGroq
-from langchain_google_vertexai import HarmBlockThreshold, HarmCategory
-from langchain_experimental.graph_transformers.diffbot import DiffbotGraphTransformer
+from langchain_openai import ChatOpenAI
 from langchain_experimental.graph_transformers import LLMGraphTransformer
-from langchain_anthropic import ChatAnthropic
-from langchain_fireworks import ChatFireworks
-from langchain_aws import ChatBedrock
-from langchain_community.chat_models import ChatOllama
-import boto3
-import google.auth
 from src.shared.constants import ADDITIONAL_INSTRUCTIONS
 from src.shared.llm_graph_builder_exception import LLMGraphBuilderException
 import re
@@ -31,111 +21,19 @@ def get_llm(model: str):
     
     logging.info("Model: {}".format(env_key))
     try:
-        if "gemini" in model:
-            model_name = env_value
-            credentials, project_id = google.auth.default()
-            llm = ChatVertexAI(
-                model_name=model_name,
-                #convert_system_message_to_human=True,
-                credentials=credentials,
-                project=project_id,
-                temperature=0,
-                safety_settings={
-                    HarmCategory.HARM_CATEGORY_UNSPECIFIED: HarmBlockThreshold.BLOCK_NONE,
-                    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
-                    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-                    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-                    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-                },
-            )
-        elif "openai" in model:
-            model_name, api_key = env_value.split(",")
-            if "o3-mini" in model:
-                llm= ChatOpenAI(
-                api_key=api_key,
-                model=model_name)
-            else:
-                llm = ChatOpenAI(
-                api_key=api_key,
-                model=model_name,
-                temperature=0,
-                )
-
-        elif "azure" in model:
-            model_name, api_endpoint, api_key, api_version = env_value.split(",")
-            llm = AzureChatOpenAI(
-                api_key=api_key,
-                azure_endpoint=api_endpoint,
-                azure_deployment=model_name,  # takes precedence over model parameter
-                api_version=api_version,
-                temperature=0,
-                max_tokens=None,
-                timeout=None,
-            )
-
-        elif "anthropic" in model:
-            model_name, api_key = env_value.split(",")
-            llm = ChatAnthropic(
-                api_key=api_key, model=model_name, temperature=0, timeout=None
-            )
-
-        elif "fireworks" in model:
-            model_name, api_key = env_value.split(",")
-            llm = ChatFireworks(api_key=api_key, model=model_name)
-
-        elif "groq" in model:
-            model_name, base_url, api_key = env_value.split(",")
-            llm = ChatGroq(api_key=api_key, model_name=model_name, temperature=0)
-
-        elif "bedrock" in model:
-            model_name, aws_access_key, aws_secret_key, region_name = env_value.split(",")
-            bedrock_client = boto3.client(
-                service_name="bedrock-runtime",
-                region_name=region_name,
-                aws_access_key_id=aws_access_key,
-                aws_secret_access_key=aws_secret_key,
-            )
-
-            llm = ChatBedrock(
-                client=bedrock_client,region_name=region_name, model_id=model_name, model_kwargs=dict(temperature=0)
-            )
-
-        elif "ollama" in model:
-            model_name, base_url = env_value.split(",")
-            llm = ChatOllama(base_url=base_url, model=model_name)
-
-        elif "diffbot" in model:
-            #model_name = "diffbot"
-            model_name, api_key = env_value.split(",")
-            llm = DiffbotGraphTransformer(
-                diffbot_api_key=api_key,
-                extract_types=["entities", "facts"],
-            )
-        
-        else: 
-            model_name, api_endpoint, api_key = env_value.split(",")
-            llm = ChatOpenAI(
-                api_key=api_key,
-                base_url=api_endpoint,
-                model=model_name,
-                temperature=0,
-            )
+        model_name, api_key = env_value.split(",")
+        llm = ChatOpenAI(
+            api_key=api_key,
+            model='gpt-5',
+            temperature=0,
+        )
     except Exception as e:
         err = f"Error while creating LLM '{model}': {str(e)}"
         logging.error(err)
         raise Exception(err)
  
     logging.info(f"Model created - Model Version: {model}")
-    return llm, model_name
-
-def get_llm_model_name(llm):
-    """Extract name of llm model from llm object"""
-    for attr in ["model_name", "model", "model_id"]:
-        model_name = getattr(llm, attr, None)
-        if model_name:
-            return model_name.lower()
-    print("Could not determine model name; defaulting to empty string")
-    return ""
+    return llm, 'gpt-5'
 
 def get_combined_chunks(chunkId_chunkDoc_list, chunks_to_combine):
     combined_chunk_document_list = []
@@ -180,33 +78,20 @@ async def get_graph_document_list(
     if additional_instructions:
         additional_instructions = sanitize_additional_instruction(additional_instructions)
     graph_document_list = []
-    if "diffbot_api_key" in dir(llm):
-        llm_transformer = llm
-    else:
-        if "get_name" in dir(llm) and llm.get_name() != "ChatOpenAI" or llm.get_name() != "ChatVertexAI" or llm.get_name() != "AzureChatOpenAI":
-            node_properties = False
-            relationship_properties = False
-        else:
-            node_properties = ["description"]
-            relationship_properties = ["description"]
-        TOOL_SUPPORTED_MODELS = {"qwen3", "deepseek"} 
-        model_name = get_llm_model_name(llm)
-        ignore_tool_usage = not any(pattern in model_name for pattern in TOOL_SUPPORTED_MODELS)
-        logging.info(f"Keeping ignore tool usage parameter as {ignore_tool_usage}")
-        llm_transformer = LLMGraphTransformer(
-            llm=llm,
-            node_properties=node_properties,
-            relationship_properties=relationship_properties,
-            allowed_nodes=allowedNodes,
-            allowed_relationships=allowedRelationship,
-            ignore_tool_usage=ignore_tool_usage,
-            additional_instructions=ADDITIONAL_INSTRUCTIONS+ (additional_instructions if additional_instructions else "")
-        )
     
-    if isinstance(llm,DiffbotGraphTransformer):
-        graph_document_list = llm_transformer.convert_to_graph_documents(combined_chunk_document_list)
-    else:
-        graph_document_list = await llm_transformer.aconvert_to_graph_documents(combined_chunk_document_list)
+    node_properties = ["description"]
+    relationship_properties = ["description"]
+
+    llm_transformer = LLMGraphTransformer(
+        llm=llm,
+        node_properties=node_properties,
+        relationship_properties=relationship_properties,
+        allowed_nodes=allowedNodes,
+        allowed_relationships=allowedRelationship,
+        additional_instructions=ADDITIONAL_INSTRUCTIONS+ (additional_instructions if additional_instructions else "")
+    )
+
+    graph_document_list = await llm_transformer.aconvert_to_graph_documents(combined_chunk_document_list)
     return graph_document_list
 
 async def get_graph_from_llm(model, chunkId_chunkDoc_list, allowedNodes, allowedRelationship, chunks_to_combine, additional_instructions=None):
