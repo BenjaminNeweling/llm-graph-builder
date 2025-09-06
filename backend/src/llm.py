@@ -24,7 +24,7 @@ def get_llm(model: str):
         model_name, api_key = env_value.split(",")
         llm = ChatOpenAI(
             api_key=api_key,
-            model='gpt-5',
+            model=model_name,
             temperature=0,
         )
     except Exception as e:
@@ -33,7 +33,16 @@ def get_llm(model: str):
         raise Exception(err)
  
     logging.info(f"Model created - Model Version: {model}")
-    return llm, 'gpt-5'
+    return llm, model_name
+
+def get_llm_model_name(llm):
+    """Extract name of llm model from llm object"""
+    for attr in ["model_name", "model", "model_id"]:
+        model_name = getattr(llm, attr, None)
+        if model_name:
+            return model_name.lower()
+    print("Could not determine model name; defaulting to empty string")
+    return ""
 
 def get_combined_chunks(chunkId_chunkDoc_list, chunks_to_combine):
     combined_chunk_document_list = []
@@ -81,13 +90,17 @@ async def get_graph_document_list(
     
     node_properties = ["description"]
     relationship_properties = ["description"]
-
+    TOOL_SUPPORTED_MODELS = {"qwen3", "deepseek"}
+    model_name = get_llm_model_name(llm)
+    ignore_tool_usage = not any(pattern in model_name for pattern in TOOL_SUPPORTED_MODELS)
+    logging.info(f"Keeping ignore tool usage parameter as {ignore_tool_usage}")
     llm_transformer = LLMGraphTransformer(
         llm=llm,
         node_properties=node_properties,
         relationship_properties=relationship_properties,
         allowed_nodes=allowedNodes,
         allowed_relationships=allowedRelationship,
+        ignore_tool_usage=ignore_tool_usage,
         additional_instructions=ADDITIONAL_INSTRUCTIONS+ (additional_instructions if additional_instructions else "")
     )
 
